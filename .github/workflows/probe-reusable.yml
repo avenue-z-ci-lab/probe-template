@@ -5,42 +5,39 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      # OPEN #2 — the one that matters for EVERY option. A default checkout inside a called
-      # workflow must land the CALLER's tree. If it lands the template's, the scanners scan the
-      # wrong repository and report green on code they never looked at.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: "#2 — whose tree did a default checkout produce?"
+      - name: "#2 whose tree did a default checkout produce"
         run: |
           set -u
-          echo "--- markers present ---"
-          ls MARKER-*.txt 2>/dev/null || echo "(none)"
+          ls MARKER-*.txt 2>/dev/null || echo "(no markers)"
           if [ -f MARKER-caller.txt ]; then
-            echo "RESULT #2: the CALLER's tree (correct — the design's assumption holds)"
+            echo "RESULT2: CALLER tree - correct, the design assumption holds"
           elif [ -f MARKER-template.txt ]; then
-            echo "RESULT #2: the TEMPLATE's tree (WRONG — scanners would scan the wrong repo)"
+            echo "RESULT2: TEMPLATE tree - WRONG, scanners would scan the wrong repo"
           else
-            echo "RESULT #2: INDETERMINATE — neither marker found"
+            echo "RESULT2: INDETERMINATE"
           fi
-          echo "origin = $(git remote get-url origin 2>/dev/null || echo none)"
-
-      # OPTION C — is job_workflow_ref present as an OIDC CLAIM, given it is absent from the
-      # github context? Never print the token itself; only named claims.
-      - name: "C — does the OIDC token carry job_workflow_ref?"
+          echo "ORIGIN: $(git remote get-url origin 2>/dev/null || echo none)"
+      - name: "C does the OIDC token carry job_workflow_ref"
         run: |
           set -uo pipefail
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "RESULT C: NO TOKEN — the caller did not grant id-token: write"
+            echo "RESULTC: NO_TOKEN - caller did not grant id-token write"
             exit 0
           fi
           curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=probe" -o /tmp/t.json
-          python3 - <<'PY'
-import base64, json
-tok = json.load(open('/tmp/t.json'))['value']
-p = tok.split('.')[1]
-p += '=' * (-len(p) % 4)
-c = json.loads(base64.urlsafe_b64decode(p))
-for k in ('job_workflow_ref', 'workflow_ref', 'repository', 'sub'):
-    print(f"CLAIM {k} = [{c.get(k, '<ABSENT>')}]")
-print("RESULT C:", "PRESENT" if c.get('job_workflow_ref') else "ABSENT")
-PY
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=probe" -o t.json
+          body="$(jq -r .value t.json | cut -d. -f2)"
+          pad=$(( (4 - ${#body} % 4) % 4 ))
+          [ "$pad" -eq 0 ] || body="${body}$(printf '=%.0s' $(seq 1 "$pad"))"
+          printf '%s' "$body" | tr '_-' '/+' | base64 -d > claims.json
+          echo "CLAIM job_workflow_ref: $(jq -r '.job_workflow_ref // "<ABSENT>"' claims.json)"
+          echo "CLAIM workflow_ref:     $(jq -r '.workflow_ref // "<ABSENT>"' claims.json)"
+          echo "CLAIM repository:       $(jq -r '.repository // "<ABSENT>"' claims.json)"
+          echo "CLAIM sub:              $(jq -r '.sub // "<ABSENT>"' claims.json)"
+          if [ "$(jq -r 'has("job_workflow_ref")' claims.json)" = "true" ]; then
+            echo "RESULTC: PRESENT"
+          else
+            echo "RESULTC: ABSENT"
+          fi
+          rm -f t.json claims.json
